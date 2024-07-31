@@ -8,12 +8,19 @@ Implementation of general Up/Down-like routings.
 */
 
 use ::rand::{rngs::StdRng};
-
+use std::cell::RefCell;
+use crate::pattern::{new_pattern};
+use crate::PatternBuilderArgument;
 use crate::match_object_panic;
 use crate::config_parser::ConfigurationValue;
 use crate::routing::prelude::*;
 use crate::topology::{Topology,NeighbourRouterIteratorItem,Location};
 use crate::matrix::Matrix;
+use crate::pattern::Pattern;
+// use std::collections::HashMap;
+use std::rc::Rc;
+// use rand::Rng;
+use crate::routing::RoutingTable;
 
 ///Use a shortest up/down path from origin to destination.
 ///The up/down paths are understood as provided by `Topology::up_down_distance`.
@@ -395,6 +402,195 @@ impl ExplicitUpDown
 			label_horizontal_otherwise,
 		}
 	}
+}
+///Routing for indirect networks which follows up-down routes adaptively.
+#[derive(Debug)]
+pub struct UpDownDerouting
+{
+	///Maximum number of non-shortest (deroutes) hops to make.
+	allowed_updowns: usize,
+	/// (Optional): VC to take in each UpDown stage. By default one different VC per UpDown path.
+	virtual_channels: Vec<Vec<usize>>,
+	/// Stages in the multistage, by the default 1.
+	stages: usize,
+	routing_table: Rc<RefCell<RoutingTable>>,
+}
+impl Routing for UpDownDerouting
+{
+	fn next(&self, routing_info: &RoutingInfo, topology: &dyn Topology, current_router: usize, target_router: usize, target_server: Option<usize>, num_virtual_channels: usize, rng: &mut StdRng) -> Result<RoutingNextCandidates, Error> {
+		let num_ports=topology.ports(current_router);
+		let mut r=Vec::with_capacity(num_ports*num_virtual_channels);
+
+		let avaliable_updown_deroutes = routing_info.selections.as_ref().unwrap()[0] as usize; // asigna el numero de saltos permitidos
+		let vc_index= self.allowed_updowns - avaliable_updown_deroutes;
+		let distances = topology.up_down_distance(current_router, target_router);
+		match distances {
+			Some((up_distance, down_distance)) => {
+				let total_distance = up_distance + down_distance;
+
+				if total_distance == 0 { // CASO 1: el router actual es el router destino
+					let target_server = target_server.expect("target server was not given.");
+					for i in 0..topology.ports(current_router)
+					{
+						if let (Location::ServerPort(server),_link_class)=topology.neighbour(current_router,i)
+						{
+							if server==target_server
+							{
+								return Ok(RoutingNextCandidates{candidates:(0..num_virtual_channels).map(|vc|CandidateEgress::new(i,vc)).collect(),idempotent:true});
+							}
+						}
+					}
+					unreachable!();
+				} else { // CASO 2: el router actual tiene un camino up/down hacia el destino
+					for i in 0..num_ports
+					{
+						if let (Location::RouterPort{router_index,router_port:_},_link_class)=topology.neighbour(current_router,i)
+						{
+							if let Some((new_u, new_d)) = topology.up_down_distance(router_index,target_router)
+							{
+								if (new_u<up_distance && new_d<=down_distance) || (new_u<=up_distance && new_d<down_distance)
+								{
+									r.extend((0..num_virtual_channels).map(|vc|CandidateEgress::new(i,vc)));
+								}
+							}
+						}
+					}
+				}
+			},
+			None => { // CASO 3: el router actual no tiene un camino up/down hacia el destino
+				if self.routing_table.borrow().is_leaf( current_router) { // hay que escoger un camino
+					let mut routing_table = self.routing_table.borrow_mut();
+					let port = routing_table.find_common_intermediate_node(topology, current_router, target_router);
+					r.extend(self.virtual_channels[vc_index].iter().map(|&vc|CandidateEgress::new(port,vc)));
+				} else { // el camino ya esta escogido
+					for NeighbourRouterIteratorItem{link_class: next_link_class,port_index,neighbour_router:neighbour_router_index,..} in topology.neighbour_router_iter(current_router)
+					{
+						if let Some(_) = topology.up_down_distance(neighbour_router_index,target_router)
+						{
+							r.extend(self.virtual_channels[vc_index].iter().map(|&vc|CandidateEgress::new(port_index,vc)));
+						}
+					}
+				} 
+			}
+		}
+		Ok(RoutingNextCandidates{candidates:r,idempotent:true})
+	}
+		
+	fn initialize_routing_info(&self, routing_info:&RefCell<RoutingInfo>, _topology:&dyn Topology, current_router:usize, _target_touter:usize, _target_server:Option<usize>, _rng: &mut StdRng)
+	{
+		routing_info.borrow_mut().selections=Some(vec![self.allowed_updowns as i32]);
+		routing_info.borrow_mut().visited_routers=Some(vec![current_router]);
+		routing_info.borrow_mut().auxiliar= RefCell::new(Some(Box::new(vec![0usize;self.stages])));
+
+	}
+	fn update_routing_info(&self, routing_info:&RefCell<RoutingInfo>, topology:&dyn Topology, current_router:usize, current_port:usize, target_router:usize, _target_server:Option<usize>,_rng: &mut StdRng)
+	{
+
+		if let (Location::RouterPort{router_index: _previous_router,router_port:_},link_class)=topology.neighbour(current_router,current_port)
+		{
+			let mut bri=routing_info.borrow_mut();
+			let aux = bri.auxiliar.borrow_mut().take().unwrap();
+			let mut saltos =  aux.downcast_ref::<Vec<usize>>().unwrap().clone();
+			if saltos[link_class] != 0
+			{
+				saltos[link_class] = 0usize;
+				if link_class == 0  && current_router != target_router// now we are in last stage
+				{
+					match bri.selections
+					{
+						Some(ref mut v) =>
+							{
+								let available_updown_deroutes=v[0];
+								if available_updown_deroutes==0
+								{
+									panic!("Bad deroute :(");
+								}
+								v[0]= available_updown_deroutes-1;
+							}
+						None => panic!("selections not initialized"),
+					};
+				}
+			}
+			else
+			{
+				saltos[link_class] = 1usize;
+			}
+
+			bri.auxiliar.replace(Some(Box::new(saltos)));
+
+			match bri.visited_routers
+			{
+				Some(ref mut v) =>
+				{
+					v.push(current_router);
+				}
+				None => panic!("visited_routers not initialized"),
+			};
+
+		}
+	}
+	fn initialize(&mut self, topology: &dyn Topology, rng: &mut StdRng) {
+	}
+	fn performed_request(&self, _requested:&CandidateEgress, _routing_info:&RefCell<RoutingInfo>, _topology:&dyn Topology, _current_router:usize, _target_router:usize, _target_server:Option<usize>, _num_virtual_channels:usize, _rng:&mut StdRng)
+	{
+	}
+	fn statistics(&self, _cycle:Time) -> Option<ConfigurationValue>
+	{
+		return None;
+	}
+	fn reset_statistics(&mut self, _next_cycle:Time)
+	{
+	}
+}
+impl UpDownDerouting {
+    pub fn new(arg: RoutingBuilderArgument) -> UpDownDerouting {
+        let mut allowed_updowns = None;
+        let mut stages = 1usize;
+        let mut virtual_channels = None;
+
+        if let &ConfigurationValue::Object(ref cv_name, ref cv_pairs) = arg.cv {
+            if cv_name != "UpDownDerouting" {
+                panic!("A UpDownDerouting must be created from a `UpDownDerouting` object not `{}`", cv_name);
+            }
+            for &(ref name, ref value) in cv_pairs {
+                match AsRef::<str>::as_ref(&name) {
+                    "allowed_updowns" => match value {
+                        &ConfigurationValue::Number(f) => allowed_updowns = Some(f as usize),
+                        _ => panic!("bad value for allowed_deroutes"),
+                    },
+                    "stages" => match value {
+                        &ConfigurationValue::Number(f) => stages = f as usize,
+                        _ => (),
+                    },
+                    "virtual_channels" => match value {
+                        ConfigurationValue::Array(f) => virtual_channels = Some(f.into_iter().map(|a| a.as_array().unwrap().into_iter().map(|b| b.as_usize().unwrap()).collect()).collect()),
+                        _ => (),
+                    },
+                    "legend_name" => (),
+                    _ => panic!("Nothing to do with field {} in UpDownDerouting", name),
+                }
+            }
+        } else {
+            panic!("Trying to create a UpDownDerouting from a non-Object");
+        }
+
+        let allowed_updowns = allowed_updowns.expect("There were no allowed_deroutes");
+
+        let virtual_channels = match virtual_channels {
+            Some(v) => v,
+            None => {
+				let a= vec![0;allowed_updowns];
+				a.iter().enumerate().map(|(i,_vc)|vec![i]).collect::<Vec<Vec<usize>>>()
+			}
+        };
+
+        UpDownDerouting {
+            allowed_updowns,
+            virtual_channels,
+            stages,
+			routing_table: Rc::new(RefCell::new(RoutingTable::new())),
+        }
+    }
 }
 
 #[cfg(test)]

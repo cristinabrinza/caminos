@@ -82,6 +82,104 @@ impl RoutingInfo
 	}
 }
 
+#[derive(Debug)]
+pub struct RoutingTable {
+    paths: HashMap<(usize, usize), Vec<(usize, usize, usize, usize)>>,
+	updown_paths: HashMap<(usize, usize), bool>,
+	leaf_routers: Vec<bool>,
+}
+
+impl RoutingTable {
+	pub fn new() -> RoutingTable {
+        RoutingTable {
+            paths: HashMap::new(),
+			updown_paths: HashMap::new(),
+			leaf_routers: Vec::new(),
+        }
+    }
+
+    pub fn add_path(&mut self, source: usize, source_port: usize, intermediate: usize, destination: usize) {
+        self.paths.entry((source, destination))
+                  .or_insert_with(Vec::new)
+                  .push((source, source_port, intermediate, destination));
+    }
+
+    pub fn get_paths(&self, source: usize, destination: usize) -> Option<&Vec<(usize, usize, usize, usize)>> {
+        self.paths.get(&(source, destination))
+    }
+
+    pub fn get_random_path(&self, source: usize, destination: usize) -> Option<&(usize, usize, usize, usize)> {
+        if let Some(paths) = self.get_paths(source, destination) {
+            let mut rng = rand::thread_rng();
+            return paths.choose(&mut rng);
+        }
+        None
+    }
+
+	// Construir una tabla con todas las parejas de routers
+	pub fn build_updown_paths(&mut self, topology: &dyn Topology) {
+		for i in 0..topology.num_routers() {
+			for j in 0..topology.num_routers() {
+				if let Some(_) = topology.up_down_distance(i, j) {
+					self.updown_paths.insert((i, j), true);
+				}
+				else {
+					self.updown_paths.insert((i, j), false);
+				}
+			}
+		}
+	}
+
+	// Comprobar si dos routers están conectados por un enlace ascendente/descendente
+	pub fn is_updown_path(&self, source: usize, destination: usize) -> bool {
+		if let Some(updown) = self.updown_paths.get(&(source, destination)) {
+			return *updown;
+		}
+		false
+	}
+
+    pub fn find_common_intermediate_node(
+        &mut self,
+        topology: &dyn Topology,
+        source: usize,
+        destination: usize,
+    ) -> usize {
+		// Recorrer mis vecinos
+		for NeighbourRouterIteratorItem {link_class: next_link_class,port_index,neighbour_router:neighbour_router_index,..} in topology.neighbour_router_iter(source) 
+		{
+			if self.is_updown_path(neighbour_router_index, destination) {
+				self.add_path(source, port_index, neighbour_router_index, destination); 
+			}
+		}	
+
+        // Seleccionar un nodo intermedio aleatorio
+		if let Some(path) = self.get_random_path(source, destination) {
+			return path.1;
+		}
+		else {
+            // Manejar el caso en que no se encuentra un camino
+            panic!("No se encontró un camino de {} a {}", source, destination);
+        }
+    }
+	// Funcion que almacena los routers hoja a true y false si no lo son
+	pub fn build_leaf_routers(&mut self, topology: &dyn Topology) {
+		for i in 0..topology.num_routers() {
+			for j in 0..topology.ports(i) {
+				if let Location::ServerPort(_) = topology.neighbour(i, j).0 {
+					self.leaf_routers.push(true);
+					break; 
+				}
+			}
+		}
+	}
+	 pub fn is_leaf(&self, router: usize) -> bool {
+		if let Some(leaf) = self.leaf_routers.get(router) {
+			return *leaf;
+		}
+		false
+	 }	
+}
+
 ///Annotations by the routing to keep track of the candidates.
 #[derive(Clone,Debug,Default)]
 pub struct RoutingAnnotation
@@ -430,6 +528,7 @@ pub fn new_routing(arg: RoutingBuilderArgument) -> Box<dyn Routing>
 			"Stubborn" => Box::new(Stubborn::new(arg)),
 			"UpDown" => Box::new(UpDown::new(arg)),
 			"UpDownStar" => Box::new(ExplicitUpDown::new(arg)),
+			"UpDownDerouting" => Box::new(UpDownDerouting::new(arg)),
 			"ChannelsPerHop" => Box::new(ChannelsPerHop::new(arg)),
 			"ChannelsPerHopPerLinkClass" => Box::new(ChannelsPerHopPerLinkClass::new(arg)),
 			"AscendantChannelsWithLinkClass" => Box::new(AscendantChannelsWithLinkClass::new(arg)),
