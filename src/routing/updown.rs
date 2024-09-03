@@ -9,14 +9,11 @@ Implementation of general Up/Down-like routings.
 
 use ::rand::{rngs::StdRng};
 use std::cell::RefCell;
-use crate::pattern::{new_pattern};
-use crate::PatternBuilderArgument;
 use crate::match_object_panic;
 use crate::config_parser::ConfigurationValue;
 use crate::routing::prelude::*;
 use crate::topology::{Topology,NeighbourRouterIteratorItem,Location};
 use crate::matrix::Matrix;
-use crate::pattern::Pattern;
 // use std::collections::HashMap;
 use std::rc::Rc;
 // use rand::Rng;
@@ -417,75 +414,73 @@ pub struct UpDownDerouting
 }
 impl Routing for UpDownDerouting
 {
-	fn next(&self, routing_info: &RoutingInfo, topology: &dyn Topology, current_router: usize, target_router: usize, target_server: Option<usize>, num_virtual_channels: usize, rng: &mut StdRng) -> Result<RoutingNextCandidates, Error> {
+	fn next(&self, routing_info: &RoutingInfo, topology: &dyn Topology, current_router: usize, target_router: usize, target_server: Option<usize>, num_virtual_channels: usize, _rng: &mut StdRng) -> Result<RoutingNextCandidates, Error> {
 		let num_ports=topology.ports(current_router);
 		let mut r=Vec::with_capacity(num_ports*num_virtual_channels);
+		// imprime el valor de num_virtual_channels
+		println!("HOLAAAA num_virtual_channels={}",num_virtual_channels);
 
-		let avaliable_updown_deroutes = routing_info.selections.as_ref().unwrap()[0] as usize; // asigna el numero de saltos permitidos
-		let vc_index= self.allowed_updowns - avaliable_updown_deroutes;
-		let distances = topology.up_down_distance(current_router, target_router);
-		match distances {
-			Some((up_distance, down_distance)) => {
-				let total_distance = up_distance + down_distance;
-
-				if total_distance == 0 { // CASO 1: el router actual es el router destino
-					let target_server = target_server.expect("target server was not given.");
-					for i in 0..topology.ports(current_router)
+		//let avaliable_updown_deroutes = routing_info.selections.as_ref().unwrap()[0] as usize; // asigna el numero de saltos permitidos
+		//let vc_index= self.allowed_updowns - avaliable_updown_deroutes;
+		//let distances = topology.up_down_distance(current_router, target_router);
+		let distance = topology.distance(current_router, target_router);
+		//println!("distances={:?} current_router={current_router} target_router={target_router}",distances);
+		//println!("distance={:?} c={current_router} t={target_router}",distance);
+		match distance {
+			0 => {// CASO 1: el router actual es el router destino
+				let target_server = target_server.expect("target server was not given.");
+				for i in 0..topology.ports(current_router)
+				{
+					if let (Location::ServerPort(server),_link_class)=topology.neighbour(current_router,i)
 					{
-						if let (Location::ServerPort(server),_link_class)=topology.neighbour(current_router,i)
+						if server==target_server
 						{
-							if server==target_server
-							{
-								return Ok(RoutingNextCandidates{candidates:(0..num_virtual_channels).map(|vc|CandidateEgress::new(i,vc)).collect(),idempotent:true});
-							}
+							return Ok(RoutingNextCandidates{candidates:(0..num_virtual_channels).map(|vc|CandidateEgress::new(i,vc)).collect(),idempotent:true});
 						}
 					}
-					unreachable!();
-				} else { // CASO 2: el router actual tiene un camino up/down hacia el destino
-					for i in 0..num_ports
+				}
+				unreachable!();
+			},
+			1 => { // CASO 2: el router actual esta a un salto del destino
+				for i in 0..num_ports
+				{
+					if let (Location::RouterPort{router_index,router_port:_},_link_class)=topology.neighbour(current_router,i)
 					{
-						if let (Location::RouterPort{router_index,router_port:_},_link_class)=topology.neighbour(current_router,i)
+						// si la distancia entre el vecino y el destino es 0, entonces es el router destino
+						if topology.distance(router_index, target_router) == 0
 						{
-							if let Some((new_u, new_d)) = topology.up_down_distance(router_index,target_router)
-							{
-								if (new_u<up_distance && new_d<=down_distance) || (new_u<=up_distance && new_d<down_distance)
-								{
-									r.extend((0..num_virtual_channels).map(|vc|CandidateEgress::new(i,vc)));
-								}
-							}
+							r.extend((0..num_virtual_channels).map(|vc|CandidateEgress::new(i,vc)));
 						}
 					}
 				}
 			},
-			None => { // CASO 3: el router actual no tiene un camino up/down hacia el destino
-				if self.routing_table.borrow().is_leaf( current_router) { // hay que escoger un camino
-					let mut routing_table = self.routing_table.borrow_mut();
-					let port = routing_table.find_common_intermediate_node(topology, current_router, target_router);
-					r.extend(self.virtual_channels[vc_index].iter().map(|&vc|CandidateEgress::new(port,vc)));
-				} else { // el camino ya esta escogido
-					for NeighbourRouterIteratorItem{link_class: next_link_class,port_index,neighbour_router:neighbour_router_index,..} in topology.neighbour_router_iter(current_router)
-					{
-						if let Some(_) = topology.up_down_distance(neighbour_router_index,target_router)
-						{
-							r.extend(self.virtual_channels[vc_index].iter().map(|&vc|CandidateEgress::new(port_index,vc)));
-						}
-					}
-				} 
-			}
+			2 => { // CASO 3: el router tiene un camino up/down hacia el destino
+				let next_port = self.routing_table.borrow().next_router_1(current_router, target_router);
+				r.extend((0..num_virtual_channels).map(|vc|CandidateEgress::new(next_port,vc)));
+			},
+			3 => { // CASO 4: el router actual esta a 3 saltos del destino
+				//println!("distancia 3");
+				let next_port = self.routing_table.borrow().next_router_2(current_router, target_router, topology);
+				r.extend((0..num_virtual_channels).map(|vc|CandidateEgress::new(next_port,vc)));
+			},
+			4 => { // CASO 5: el router actual esta a 4 saltos o dos up/down del destino
+				//println!("distancia 4");
+				let next_port = self.routing_table.borrow().next_router_3(current_router, target_router, topology);
+				r.extend((0..num_virtual_channels).map(|vc|CandidateEgress::new(next_port,vc)));	
+				//r.extend(self.virtual_channels[vc_index].iter().map(|&vc|CandidateEgress::new(port_index,vc)));			
+			},
+			_ => panic!("rutas largas"),
 		}
 		Ok(RoutingNextCandidates{candidates:r,idempotent:true})
 	}
-		
 	fn initialize_routing_info(&self, routing_info:&RefCell<RoutingInfo>, _topology:&dyn Topology, current_router:usize, _target_touter:usize, _target_server:Option<usize>, _rng: &mut StdRng)
 	{
 		routing_info.borrow_mut().selections=Some(vec![self.allowed_updowns as i32]);
 		routing_info.borrow_mut().visited_routers=Some(vec![current_router]);
 		routing_info.borrow_mut().auxiliar= RefCell::new(Some(Box::new(vec![0usize;self.stages])));
-
 	}
 	fn update_routing_info(&self, routing_info:&RefCell<RoutingInfo>, topology:&dyn Topology, current_router:usize, current_port:usize, target_router:usize, _target_server:Option<usize>,_rng: &mut StdRng)
 	{
-
 		if let (Location::RouterPort{router_index: _previous_router,router_port:_},link_class)=topology.neighbour(current_router,current_port)
 		{
 			let mut bri=routing_info.borrow_mut();
@@ -529,7 +524,10 @@ impl Routing for UpDownDerouting
 
 		}
 	}
-	fn initialize(&mut self, topology: &dyn Topology, rng: &mut StdRng) {
+	fn initialize(&mut self, topology: &dyn Topology, _rng: &mut StdRng) {
+		self.routing_table.borrow_mut().build_leaf_spine_routers(topology);
+		self.routing_table.borrow_mut().build_distance_2_paths(topology);
+		//self.routing_table.borrow_mut().print_table();
 	}
 	fn performed_request(&self, _requested:&CandidateEgress, _routing_info:&RefCell<RoutingInfo>, _topology:&dyn Topology, _current_router:usize, _target_router:usize, _target_server:Option<usize>, _num_virtual_channels:usize, _rng:&mut StdRng)
 	{
@@ -547,6 +545,7 @@ impl UpDownDerouting {
         let mut allowed_updowns = None;
         let mut stages = 1usize;
         let mut virtual_channels = None;
+		let _routing_table = RoutingTable::new();
 
         if let &ConfigurationValue::Object(ref cv_name, ref cv_pairs) = arg.cv {
             if cv_name != "UpDownDerouting" {
