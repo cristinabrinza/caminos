@@ -85,36 +85,33 @@ impl RoutingInfo
 
 #[derive(Debug)]
 pub struct RoutingTable {
-    paths: HashMap<(usize, usize, usize), (usize, usize)>, // (source_router, intermediate_router, destination_router) -> (source_port, intermediate_port)
-	leaf_routers: Vec<usize>,
-	spine_routers: Vec<usize>,
+    paths: HashMap<(usize, usize), Vec<usize>>, // (source_router, destination_router) -> [intermediate_router1, intermediate_router2, ...]
+	rutas: HashMap<(usize, usize, usize), (usize, usize)>
 }
 
 impl RoutingTable {
 	pub fn new() -> RoutingTable {
         RoutingTable {
 			paths: HashMap::new(),
-			leaf_routers: Vec::new(),
-			spine_routers: Vec::new(),
         }
     }
 
 	// Para debug: funcion que clasifica los routers hoja y raiz
-	pub fn build_leaf_spine_routers(&mut self, topology: &dyn Topology) { // Complejidad O(n^2)
-		for i in 0..topology.num_routers() {
-			for j in 0..topology.ports(i) {
-				if let Location::ServerPort(_) = topology.neighbour(i, j).0 {
-					self.leaf_routers.push(i);
-					//println!("Router {} is leaf", i);
-					break;
-				}
-				if j == topology.ports(i) - 1 {
-					self.spine_routers.push(i);
-					//println!("Router {} is spine", i);
-				}
-			}
-		}
-	}
+	// pub fn build_leaf_spine_routers(&mut self, topology: &dyn Topology) { 
+	// 	for i in 0..topology.num_routers() {
+	// 		for j in 0..topology.ports(i) {
+	// 			if let Location::ServerPort(_) = topology.neighbour(i, j).0 {
+	// 				self.leaf_routers.push(i);
+	// 				//println!("Router {} is leaf", i);
+	// 				break;
+	// 			}
+	// 			if j == topology.ports(i) - 1 {
+	// 				self.spine_routers.push(i);
+	// 				//println!("Router {} is spine", i);
+	// 			}
+	// 		}
+	// 	}
+	// }
 
 	// Funcion que construye una tabla de rutas de distancia de 2 saltos para cada router 
 	pub fn build_distance_2_paths(&mut self, topology: &dyn Topology) { // Complejidad O(n^3)
@@ -127,7 +124,30 @@ impl RoutingTable {
 						if let Location::RouterPort{router_index: destination_router, router_port:_} = topology.neighbour(intermediate_router, k).0 {
 							// si el router vecino de j es un router hoja
 							if destination_router != source_router {
-								self.paths.insert((source_router, intermediate_router, destination_router), (j, k));
+								self.paths
+                                    .entry((source_router, destination_router))
+                                    .or_insert_with(Vec::new)
+                                    .push(intermediate_router);
+							}
+						}
+					}
+				}
+			}
+		}
+	} 
+
+	// Funcion que construye una tabla de rutas de distancia de 2 saltos para cada router 
+	pub fn build_distance_2_rutas(&mut self, topology: &dyn Topology) { // Complejidad O(n^3)
+		// Recorre todos los routers
+		// Si el router i esta a dos saltos de k, pasando por j, se añade la ruta (i, j, k)
+		for source_router in 0..topology.num_routers() {
+			for j in 0..topology.ports(source_router) {
+				if let Location::RouterPort{router_index: intermediate_router, router_port:_} = topology.neighbour(source_router, j).0 {
+					for k in 0..topology.ports(intermediate_router) {
+						if let Location::RouterPort{router_index: destination_router, router_port:_} = topology.neighbour(intermediate_router, k).0 {
+							// si el router vecino de j es un router hoja
+							if destination_router != source_router {
+								self.rutas.insert((source_router, intermediate_router, destination_router), (j, k));
 							}
 						}
 					}
@@ -193,19 +213,18 @@ impl RoutingTable {
 	}
 
 	// Para debug: funcion que imprime el contenido de la tabla de rutas
-	pub fn print_table(&self) {
-		for (key, value) in &self.paths {
-			println!("({}, {}, {}) -> ({}, {})", key.0, key.1, key.2, value.0, value.1);
+	pub fn print_rutas(&self) {
+		for (key, value) in &self.rutas {
+			println!("rutas ({}, {}, {}) -> ({}, {})", key.0, key.1, key.2, value.0, value.1);
 		}
 	}
 
-	// Para debug: funcion que verifica si un router es hoja
-	 pub fn is_leaf(&self, router: usize) -> bool {
-		if self.leaf_routers.contains(&router) {
-			return true;
+	pub fn print_paths(&self) {
+		for (key, value) in &self.paths {
+			println!("paths ({}, {}, {}) -> {:?}", key.0, key.1, key.2, value);
 		}
-		false
-	 }	
+	}
+
 }
 
 ///Annotations by the routing to keep track of the candidates.

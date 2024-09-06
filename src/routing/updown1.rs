@@ -444,24 +444,28 @@ impl Routing for UpDownDerouting
 						// si la distancia entre el vecino y el destino es 0, entonces es el router destino
 						if topology.distance(router_index, target_router) == 0
 						{
-							//r.extend((0..num_virtual_channels).map(|vc|CandidateEgress::new(i,vc)));
-							r.extend(self.virtual_channels[0].iter().map(|&vc|CandidateEgress::new(i,vc)));
+							r.extend((0..num_virtual_channels).map(|vc|CandidateEgress::new(i,vc)));
+							//r.extend(self.virtual_channels[0].iter().map(|&vc|CandidateEgress::new(i,vc)));
 						}
 					}
 				}
 			},
 			2 => { // CASO 3: el router tiene un camino up/down hacia el destino
-				// let next_port = self.routing_table.borrow().next_router_1(current_router, target_router);
-				// r.extend(self.virtual_channels[0].iter().map(|&vc|CandidateEgress::new(next_port,vc)));
+				let next_port = self.routing_table.borrow().next_router_1(current_router, target_router);
+				r.extend((0..num_virtual_channels).map(|vc|CandidateEgress::new(next_port,vc)));
+				//r.extend(self.virtual_channels[0].iter().map(|&vc|CandidateEgress::new(next_port,vc)));
 			},
 			3 => { // CASO 4: el router actual esta a 3 saltos del destino
 				//println!("distancia 3");
-				// let next_port = self.routing_table.borrow().next_router_2(current_router, target_router, topology);
-				// r.extend(self.virtual_channels[1].iter().map(|&vc|CandidateEgress::new(next_port,vc)));
+				let next_port = self.routing_table.borrow().next_router_2(current_router, target_router, topology);
+				//r.extend((0..num_virtual_channels).map(|vc|CandidateEgress::new(next_port,vc)));
+				r.extend(self.virtual_channels[1].iter().map(|&vc|CandidateEgress::new(next_port,vc)));
 			},
 			4 => { // CASO 5: el router actual esta a 4 saltos o dos up/down del destino
-				// let next_port = self.routing_table.borrow().next_router_3(current_router, target_router, topology);
-				// r.extend(self.virtual_channels[1].iter().map(|&vc|CandidateEgress::new(next_port,vc)));	
+				//println!("distancia 4");
+				let next_port = self.routing_table.borrow().next_router_3(current_router, target_router, topology);
+				//r.extend((0..num_virtual_channels).map(|vc|CandidateEgress::new(next_port,vc)));	
+				r.extend(self.virtual_channels[1].iter().map(|&vc|CandidateEgress::new(next_port,vc)));	
 			},
 			_ => panic!("rutas largas"),
 		}
@@ -519,10 +523,9 @@ impl Routing for UpDownDerouting
 		}
 	}
 	fn initialize(&mut self, topology: &dyn Topology, _rng: &mut StdRng) {
+		self.routing_table.borrow_mut().build_leaf_spine_routers(topology);
 		self.routing_table.borrow_mut().build_distance_2_paths(topology);
-		self.routing_table.borrow_mut().build_distance_2_rutas(topology);
-		self.routing_table.borrow_mut().print_paths();
-		self.routing_table.borrow_mut().print_rutas();
+		//self.routing_table.borrow_mut().print_table();
 	}
 	fn performed_request(&self, _requested:&CandidateEgress, _routing_info:&RefCell<RoutingInfo>, _topology:&dyn Topology, _current_router:usize, _target_router:usize, _target_server:Option<usize>, _num_virtual_channels:usize, _rng:&mut StdRng)
 	{
