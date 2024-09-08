@@ -86,32 +86,31 @@ impl RoutingInfo
 #[derive(Debug)]
 pub struct RoutingTable {
     paths: HashMap<(usize, usize), Vec<usize>>, // (source_router, destination_router) -> [intermediate_router1, intermediate_router2, ...]
-	rutas: HashMap<(usize, usize, usize), (usize, usize)>
+	// rutas: HashMap<(usize, usize, usize), (usize, usize)>
+	leaf_routers: Vec<usize>,
 }
 
 impl RoutingTable {
 	pub fn new() -> RoutingTable {
         RoutingTable {
 			paths: HashMap::new(),
+			// rutas: HashMap::new()
+			leaf_routers: Vec::new(),
         }
     }
 
 	// Para debug: funcion que clasifica los routers hoja y raiz
-	// pub fn build_leaf_spine_routers(&mut self, topology: &dyn Topology) { 
-	// 	for i in 0..topology.num_routers() {
-	// 		for j in 0..topology.ports(i) {
-	// 			if let Location::ServerPort(_) = topology.neighbour(i, j).0 {
-	// 				self.leaf_routers.push(i);
-	// 				//println!("Router {} is leaf", i);
-	// 				break;
-	// 			}
-	// 			if j == topology.ports(i) - 1 {
-	// 				self.spine_routers.push(i);
-	// 				//println!("Router {} is spine", i);
-	// 			}
-	// 		}
-	// 	}
-	// }
+	pub fn build_leaf_routers(&mut self, topology: &dyn Topology) { 
+		for i in 0..topology.num_routers() {
+			for j in 0..topology.ports(i) {
+				if let Location::ServerPort(_) = topology.neighbour(i, j).0 {
+					self.leaf_routers.push(i);
+					//println!("Router {} is leaf", i);
+					break;
+				}
+			}
+		}
+	}
 
 	// Funcion que construye una tabla de rutas de distancia de 2 saltos para cada router 
 	pub fn build_distance_2_paths(&mut self, topology: &dyn Topology) { // Complejidad O(n^3)
@@ -127,7 +126,7 @@ impl RoutingTable {
 								self.paths
                                     .entry((source_router, destination_router))
                                     .or_insert_with(Vec::new)
-                                    .push(intermediate_router);
+                                    .push(j);
 							}
 						}
 					}
@@ -136,43 +135,32 @@ impl RoutingTable {
 		}
 	} 
 
-	// Funcion que construye una tabla de rutas de distancia de 2 saltos para cada router 
-	pub fn build_distance_2_rutas(&mut self, topology: &dyn Topology) { // Complejidad O(n^3)
-		// Recorre todos los routers
-		// Si el router i esta a dos saltos de k, pasando por j, se añade la ruta (i, j, k)
-		for source_router in 0..topology.num_routers() {
-			for j in 0..topology.ports(source_router) {
-				if let Location::RouterPort{router_index: intermediate_router, router_port:_} = topology.neighbour(source_router, j).0 {
-					for k in 0..topology.ports(intermediate_router) {
-						if let Location::RouterPort{router_index: destination_router, router_port:_} = topology.neighbour(intermediate_router, k).0 {
-							// si el router vecino de j es un router hoja
-							if destination_router != source_router {
-								self.rutas.insert((source_router, intermediate_router, destination_router), (j, k));
-							}
-						}
-					}
-				}
-			}
-		}
-	} 
+	// pub fn build_distance_2_rutas(&mut self, topology: &dyn Topology) { // Complejidad O(n^3)
+	// 	// Recorre todos los routers
+	// 	// Si el router i esta a dos saltos de k, pasando por j, se añade la ruta (i, j, k)
+	// 	for source_router in 0..topology.num_routers() {
+	// 		for j in 0..topology.ports(source_router) {
+	// 			if let Location::RouterPort{router_index: intermediate_router, router_port:_} = topology.neighbour(source_router, j).0 {
+	// 				for k in 0..topology.ports(intermediate_router) {
+	// 					if let Location::RouterPort{router_index: destination_router, router_port:_} = topology.neighbour(intermediate_router, k).0 {
+	// 						// si el router vecino de j es un router hoja
+	// 						if destination_router != source_router {
+	// 							self.rutas.insert((source_router, intermediate_router, destination_router), (j, k));
+	// 						}
+	// 					}
+	// 				}
+	// 			}
+	// 		}
+	// 	}
+	// } 
 
 	pub fn next_router_1(&self, source_router: usize, destination_router: usize) -> usize {
-		// si existen varias rutas donde el router origen es source_router y el router destino es destination_router
-		// se elige una aleatoriamente y se devuelve el el puerto origen
+		// si existen varios routers intermedios a traves de los que se puede llegar de
+		// source_router a destination_router, se elige uno aleatoriamente
+		let intermediates = self.paths.get(&(source_router, destination_router)).expect("No routes found for the given source and destination.");
 		let mut rng = rand::thread_rng();
-		let mut possible_paths = Vec::new();
-		//println!("!!!1");
-		for (key, value) in &self.paths {
-			if key.0 == source_router && key.2 == destination_router {
-				possible_paths.push((key.1, value.0));
-				//println!("ruta posible: ({}, {}, {}) -> {})", key.0, key.1, key.2, value.0);
-			}
-		}
-		let random_path = possible_paths[rng.gen_range(0..possible_paths.len())];
-		//println!("longitud de possible_paths: {}", possible_paths.len());
-		//println!("ruta aleatoria: ({}, {}, {}) -> {}", source_router, random_path.0, destination_router, random_path.1);
-		//println!("\n");
-		return random_path.1
+		let random_intermediate = intermediates[rng.gen_range(0..intermediates.len())];
+		return random_intermediate;
 	}
 
 	pub fn next_router_2(&self, source_router: usize, destination_router: usize, topology: &dyn Topology) -> usize {
@@ -180,48 +168,78 @@ impl RoutingTable {
 		// es decir, es vecino de destination_router, se añade a possible_paths y se
 		// elige una aleatoriamente
 		let mut rng = rand::thread_rng();
-		let mut possible_paths = Vec::new();
-		//println!("!!!2");
-		for (key, value) in &self.paths {
-			if key.0 == source_router && topology.distance(key.2, destination_router) == 1 {
-				possible_paths.push((key.1, value.0));
-				//println!("ruta posible: ({}, {}, {}) -> {})", key.0, key.1, key.2, value.0);
+		let mut neighbours = Vec::new();
+		
+		for i in 0..topology.ports(destination_router) {
+			if let Location::RouterPort{router_index: neighbour_router, router_port:_} = topology.neighbour(destination_router, i).0 {
+				// si existe una path de un up/down entre source_router y neighbour_router se añade a neighbours
+				if let Some(path) = self.paths.get(&(source_router, neighbour_router)) {
+					neighbours.push(neighbour_router);
+				}
 			}
 		}
-		let random_path = possible_paths[rng.gen_range(0..possible_paths.len())];
-		//println!("longitud de possible_paths: {}", possible_paths.len());
-		//println!("ruta aleatoria: ({}, {}, {}) -> {}", source_router, random_path.0, destination_router, random_path.1);
-		//println!("\n");
-		return random_path.1
+		// se elige un router vecino aleatorio
+		let random_neighbour = neighbours[rng.gen_range(0..neighbours.len())];
+		// se obtienen los intermediarios de la ruta de source_router a random_neighbour
+		let intermediates = self.paths.get(&(source_router, random_neighbour)).expect("No routes found for the given source and destination.");
+		// se elige un intermediario aleatorio
+		let random_intermediate = intermediates[rng.gen_range(0..intermediates.len())];
+		return random_intermediate;
 	}	
 
 	pub fn next_router_3(&self, source_router: usize, destination_router: usize, topology: &dyn Topology) -> usize {
+		// Recorro todos los routers hoja
+		// Si el router hoja está a un up/down de source_router y a un up/down de destination_router
+		// Se añade el intermediario entre source_router y el router hoja a una lista y se elige uno aleatoriamente
 		let mut rng = rand::thread_rng();
-		let mut possible_paths = Vec::new();
-		//println!("!!!3");
-		for (key, value) in &self.paths {
-			if key.0 == source_router && topology.distance(key.2, destination_router) == 2 {
-				possible_paths.push((key.1, value.0));
-				//println!("ruta posible: ({}, {}, {}) -> {})", key.0, key.1, key.2, value.0);
+		let mut intermediates = Vec::new();
+		
+		for leaf_router in &self.leaf_routers {
+			// Si existe una path de un up/down entre source_router y leaf_router y entre leaf_router y destination_router
+			// Se añade leaf_router a intermediates
+			if let Some(path1) = self.paths.get(&(source_router, *leaf_router)) {
+				if self.paths.get(&(*leaf_router, destination_router)).is_some() {
+					// Añade los intermediarios de la ruta de source_router a leaf_router
+					intermediates.push(path1.clone());
+				}
 			}
 		}
-		let random_path = possible_paths[rng.gen_range(0..possible_paths.len())];
-		//println!("longitud de possible_paths: {}", possible_paths.len());
-		//println!("ruta aleatoria: ({}, {}, {}) -> {}", source_router, random_path.0, destination_router, random_path.1);
-		//println!("\n");
-		return random_path.1	
+	
+		// Verifica que `intermediates` no esté vacío antes de intentar acceder a él
+		if intermediates.is_empty() {
+			panic!("No intermediates found for the given source and destination.");
+		}
+	
+		// Obtiene una lista de intermediarios aleatorios del vector intermediates
+		let random_intermediates = intermediates[rng.gen_range(0..intermediates.len())].clone();
+		
+		// Elige un intermediario aleatorio
+		let random_intermediate = random_intermediates[rng.gen_range(0..random_intermediates.len())];
+		
+		return random_intermediate;
 	}
+	
 
 	// Para debug: funcion que imprime el contenido de la tabla de rutas
-	pub fn print_rutas(&self) {
-		for (key, value) in &self.rutas {
-			println!("rutas ({}, {}, {}) -> ({}, {})", key.0, key.1, key.2, value.0, value.1);
-		}
-	}
+	// pub fn print_rutas(&self) {
+	// 	let mut count = 0;
+	// 	for (key, value) in &self.rutas {
+	// 		if count >= 50 {
+	// 			break;
+	// 		}
+	// 		println!("rutas ({}, {}, {}) -> ({}, {})", key.0, key.1, key.2, value.0, value.1);
+	// 		count += 1;
+	// 	}
+	// }
 
 	pub fn print_paths(&self) {
+		let mut count = 0;
 		for (key, value) in &self.paths {
-			println!("paths ({}, {}, {}) -> {:?}", key.0, key.1, key.2, value);
+			if count >= 50 {
+				break;
+			}
+			println!("paths ({}, {}) -> {:?}", key.0, key.1, value);
+			count += 1;
 		}
 	}
 
