@@ -414,27 +414,13 @@ impl RoutingTable {
         }
     }
 
-	// Funcion que construye una tabla con routers hoja.
-	pub fn build_leaf_routers(&mut self, topology: &dyn Topology) { 
-		for i in 0..topology.num_routers() {
-			for j in 0..topology.ports(i) {
-				if let Location::ServerPort(_) = topology.neighbour(i, j).0 {
-					self.leaf_routers.push(i);
-					break;
-				}
-			}
-		}
-	}
-
-	// Funcion que construye una tabla de rutas de distancia de 2 saltos para cada router.
-	// Si el router i esta a dos saltos de j, pasando por k, se añade la ruta (i, j) -> (k) .
-	pub fn build_distance_2_paths(&mut self, topology: &dyn Topology) { 
-		for source_router in 0..topology.num_routers() {
-			for j in 0..topology.ports(source_router) {
+	// Funcion que construye una tabla con routers hoja y rutas de distancia de 2 saltos para cada router.
+	pub fn build_table(&mut self, topology: &dyn Topology) { 
+		for source_router in 0..topology.num_routers() { // O(n) donde n es el numero de routers
+			for j in 0..topology.ports(source_router) { // O(p) donde p es el numero de puertos del router origen
 				if let Location::RouterPort{router_index: intermediate_router, router_port:_} = topology.neighbour(source_router, j).0 {
-					for k in 0..topology.ports(intermediate_router) {
+					for k in 0..topology.ports(intermediate_router) { // O(p) donde p es el numero de puertos del router intermedio
 						if let Location::RouterPort{router_index: destination_router, router_port:_} = topology.neighbour(intermediate_router, k).0 {
-							// Si el router vecino de j es un router hoja
 							if destination_router != source_router { // Evitar ciclos
 								self.paths
                                     .entry((source_router, destination_router))
@@ -444,56 +430,52 @@ impl RoutingTable {
 						}
 					}
 				}
+				else {
+					self.leaf_routers.push(source_router);
+				}
 			}
 		}
-	} 
+	} // Por ejemplo para RFC de 372 seria O(14112)
 
 	// Funcion que obtiene el siguiente router si la distancia entre origen y destino es de 2 saltos.
 	// Busca las rutas donde source_router es el origen y destination_router es el destino.
-	// Si existen varios routers intermedios a traves de los que se puede llegar de
-	// source_router a destination_router, se elige uno aleatoriamente.
-	pub fn next_router_1(&self, source_router: usize, destination_router: usize) -> usize {
-		let intermediates = self.paths.get(&(source_router, destination_router)).expect("No routes found for the given source and destination.");
-		let mut rng = rand::thread_rng();
-		let random_intermediate = intermediates[rng.gen_range(0..intermediates.len())];
-		return random_intermediate;
+	pub fn next_router_1(&self, source_router: usize, destination_router: usize) -> Vec<usize> {
+		let intermediates = self.paths.get(&(source_router, destination_router)).expect("No routes found for the given source and destination."); // O(1)
+		return intermediates.clone();
 	}
 
 	// Funcion que obtiene el siguiente router si la distancia entre origen y destino es de 3 saltos.
-	// Busca las rutas donde source_router es el origen y su destino es vecino de destination_router, 
-	// en cuyo caso se anhade a neighbours y se elige una aleatoriamente.
-	pub fn next_router_2(&self, source_router: usize, destination_router: usize, topology: &dyn Topology) -> usize {
+	// Busca las rutas donde source_router es el origen y su destino es vecino de destination_router.
+	pub fn next_router_2(&self, source_router: usize, destination_router: usize, topology: &dyn Topology) -> Vec<usize> {
 		let mut rng = rand::thread_rng();
 		let mut neighbours = Vec::new();
-		for i in 0..topology.ports(destination_router) {
+		for i in 0..topology.ports(destination_router) { // O(p) donde p es el numero de puertos del router destino
 			if let Location::RouterPort{router_index: neighbour_router, router_port:_} = topology.neighbour(destination_router, i).0 {
-				if let Some(_path) = self.paths.get(&(source_router, neighbour_router)) {
-					neighbours.push(neighbour_router);
+				if let Some(_path) = self.paths.get(&(source_router, neighbour_router)) { // O(1)
+					neighbours.push(neighbour_router); // O(1)
 				}
 			}
 		}
 		let random_neighbour = neighbours[rng.gen_range(0..neighbours.len())];
-		let intermediates = self.paths.get(&(source_router, random_neighbour)).expect("No routes found for the given source and destination.");
-		let random_intermediate = intermediates[rng.gen_range(0..intermediates.len())];
-		return random_intermediate;
+		let intermediates = self.paths.get(&(source_router, random_neighbour)).expect("No routes found for the given source and destination."); // O(1)
+		return intermediates.clone();
 	}	
 
 	// Funcion que obtiene el siguiente router si la distancia entre origen y destino es de 4 saltos o dos up/down.
 	// Busca los routers hoja que estan a un up/down de source_router y a un up/down de destination_router,
 	// en cuyo caso se anhaden los intermedios a una lista y se elige uno aleatoriamente.
-	pub fn next_router_3(&self, source_router: usize, destination_router: usize, _topology: &dyn Topology) -> usize {
+	pub fn next_router_3(&self, source_router: usize, destination_router: usize, _topology: &dyn Topology) -> Vec<usize> {
 		let mut rng = rand::thread_rng();
 		let mut intermediates = Vec::new();
-		for leaf_router in &self.leaf_routers {
-			if let Some(path1) = self.paths.get(&(source_router, *leaf_router)) {
-				if self.paths.get(&(*leaf_router, destination_router)).is_some() {
-					intermediates.push(path1.clone());
+		for leaf_router in &self.leaf_routers { // O(h) donde h es el numero de hoja
+			if let Some(path) = self.paths.get(&(source_router, *leaf_router)) {
+				if self.paths.get(&(*leaf_router, destination_router)).is_some() { // O(1)
+					intermediates.push(path.clone()); // O(1)
 				}
 			}
 		}	
 		let random_intermediates = intermediates[rng.gen_range(0..intermediates.len())].clone();
-		let random_intermediate = random_intermediates[rng.gen_range(0..random_intermediates.len())];
-		return random_intermediate;
+		return random_intermediates;
 	}
 	
 	// Para debug: Funcion que imprime un conjunto de rutas almacenadas en la tabla.
@@ -528,6 +510,7 @@ impl Routing for UpDownDeroutingAlways
 		let num_ports=topology.ports(current_router);
 		let mut r=Vec::with_capacity(num_ports*num_virtual_channels);
 		let distance = topology.distance(current_router, target_router);
+		let mut intermediates = Vec::new();
 		if distance == 0 { // CASO 1: el router actual es el router destino
 			let target_server = target_server.expect("target server was not given.");
 			for i in 0..topology.ports(current_router)
@@ -549,25 +532,22 @@ impl Routing for UpDownDeroutingAlways
 				{
 					if topology.distance(router_index, target_router) == 0
 					{
-						r.extend(self.virtual_channels[0].iter().map(|&vc|CandidateEgress::new(i,vc)));
+						r.extend((0..num_virtual_channels).map(|vc| CandidateEgress::new(i, vc)));
 					}
 				}
 			}
 		}
 		else if distance == 3 { // CASO 4: el router actual esta a 3 saltos del destino
-			let next_port = self.routing_table.borrow().next_router_2(current_router, target_router, topology);
-			r.extend(self.virtual_channels[1].iter().map(|&vc|CandidateEgress::new(next_port,vc)));
+			intermediates = self.routing_table.borrow().next_router_2(current_router, target_router, topology);
 		}
 		else if distance == 2 && routing_info.hops == 2 { // CASO 3: el router tiene un camino up/down hacia el destino
-			let next_port = self.routing_table.borrow().next_router_1(current_router, target_router);
-			r.extend(self.virtual_channels[0].iter().map(|&vc|CandidateEgress::new(next_port,vc)));
+			intermediates = self.routing_table.borrow().next_router_1(current_router, target_router);
 		}
 		else if (distance == 2 && routing_info.hops == 0) || distance == 4 { // CASO 5: el router actual esta a 4 saltos o dos up/down del destino
-			let next_port = self.routing_table.borrow().next_router_3(current_router, target_router, topology);
-			r.extend(self.virtual_channels[1].iter().map(|&vc|CandidateEgress::new(next_port,vc)));	
+			intermediates = self.routing_table.borrow().next_router_3(current_router, target_router, topology);
 		}
-		else {
-			panic!("rutas largas");
+		for intermediate in intermediates {
+			r.extend((0..num_virtual_channels).map(|vc| CandidateEgress::new(intermediate, vc)));
 		}
 		Ok(RoutingNextCandidates{candidates:r,idempotent:true})
 	}
@@ -623,8 +603,7 @@ impl Routing for UpDownDeroutingAlways
 		}
 	}
 	fn initialize(&mut self, topology: &dyn Topology, _rng: &mut StdRng) {
-		self.routing_table.borrow_mut().build_distance_2_paths(topology);
-		self.routing_table.borrow_mut().build_leaf_routers(topology);
+		self.routing_table.borrow_mut().build_table(topology);
 	}
 	fn performed_request(&self, _requested:&CandidateEgress, _routing_info:&RefCell<RoutingInfo>, _topology:&dyn Topology, _current_router:usize, _target_router:usize, _target_server:Option<usize>, _num_virtual_channels:usize, _rng:&mut StdRng)
 	{
@@ -706,8 +685,8 @@ impl Routing for UpDownDeroutingLazy
 	fn next(&self, _routing_info: &RoutingInfo, topology: &dyn Topology, current_router: usize, target_router: usize, target_server: Option<usize>, num_virtual_channels: usize, _rng: &mut StdRng) -> Result<RoutingNextCandidates, Error> {
 		let num_ports=topology.ports(current_router);
 		let mut r=Vec::with_capacity(num_ports*num_virtual_channels);
-
 		let distance = topology.distance(current_router, target_router);
+		let mut intermediates = Vec::new();
 		match distance {
 			0 => { // CASO 1: el router actual es el router destino
 				let target_server = target_server.expect("target server was not given.");
@@ -731,24 +710,24 @@ impl Routing for UpDownDeroutingLazy
 						// si la distancia entre el vecino y el destino es 0, entonces es el router destino
 						if topology.distance(router_index, target_router) == 0
 						{
-							r.extend(self.virtual_channels[0].iter().map(|&vc|CandidateEgress::new(i,vc)));
+							r.extend((0..num_virtual_channels).map(|vc|CandidateEgress::new(i,vc)));
 						}
 					}
 				}
 			},
 			2 => { // CASO 3: el router tiene un camino up/down hacia el destino
-				let next_port = self.routing_table.borrow().next_router_1(current_router, target_router);
-				r.extend(self.virtual_channels[0].iter().map(|&vc|CandidateEgress::new(next_port,vc)));
+				intermediates = self.routing_table.borrow().next_router_1(current_router, target_router);
 			},
 			3 => { // CASO 4: el router actual esta a 3 saltos del destino
-				let next_port = self.routing_table.borrow().next_router_2(current_router, target_router, topology);
-				r.extend(self.virtual_channels[1].iter().map(|&vc|CandidateEgress::new(next_port,vc)));
+				intermediates = self.routing_table.borrow().next_router_2(current_router, target_router, topology);
 			},
 			4 => { // CASO 5: el router actual esta a 4 saltos o dos up/down del destino
-				let next_port = self.routing_table.borrow().next_router_3(current_router, target_router, topology);
-				r.extend(self.virtual_channels[1].iter().map(|&vc|CandidateEgress::new(next_port,vc)));	
+				intermediates = self.routing_table.borrow().next_router_3(current_router, target_router, topology);
 			},
 			_ => panic!("rutas largas"),
+		}
+		for intermediate in intermediates {
+			r.extend((0..num_virtual_channels).map(|vc|CandidateEgress::new(intermediate, vc)));
 		}
 		Ok(RoutingNextCandidates{candidates:r,idempotent:true})
 	}
@@ -800,12 +779,10 @@ impl Routing for UpDownDeroutingLazy
 				}
 				None => panic!("visited_routers not initialized"),
 			};
-
 		}
 	}
 	fn initialize(&mut self, topology: &dyn Topology, _rng: &mut StdRng) {
-		self.routing_table.borrow_mut().build_distance_2_paths(topology);
-		self.routing_table.borrow_mut().build_leaf_routers(topology);
+		self.routing_table.borrow_mut().build_table(topology);
 	}
 	fn performed_request(&self, _requested:&CandidateEgress, _routing_info:&RefCell<RoutingInfo>, _topology:&dyn Topology, _current_router:usize, _target_router:usize, _target_server:Option<usize>, _num_virtual_channels:usize, _rng:&mut StdRng)
 	{
@@ -860,6 +837,9 @@ impl UpDownDeroutingLazy {
 				a.iter().enumerate().map(|(i,_vc)|vec![i]).collect::<Vec<Vec<usize>>>()
 			}
         };
+
+		// imprime el valor de virtual_channels
+		println!("{:?}", virtual_channels);
 
         UpDownDeroutingLazy {
             allowed_updowns,
