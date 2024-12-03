@@ -15,6 +15,8 @@ use crate::{
 	error::{Error,SourceLocation},
 	};
 use crate::quantify::Quantifiable;
+use crate::File;
+use std::io::{BufReader,BufRead};
 
 ///Requirements on each level. They are combined by the multiple stages of a MultiStage topology aiming to get values compatible with all of them.
 #[derive(Debug,Clone,Copy)]
@@ -580,7 +582,403 @@ impl ExplicitStage
 	}
 }
 
+/**
 
+A Stage with a explicitly given list of neighbours for each router. Ignores grouping.
+
+Apt to build random stages.
+
+
+
+TODO: document and example.
+
+**/
+
+#[derive(Quantifiable)]
+
+#[derive(Debug)]
+
+pub struct ExplicitStageFile
+
+{
+
+	///Number of routers in the bottom level.
+
+	bottom_size: usize,
+
+	///Number of routers in the top level.
+
+	top_size: usize,
+
+	bottom_list: Vec<Vec<(usize,usize)>>,
+
+	top_list: Vec<Vec<(usize,usize)>>,
+
+}
+
+impl Stage for ExplicitStageFile
+
+{
+
+	//fn below_multiplier(&self) -> usize
+
+	//{
+
+	//	todo!()
+
+	//}
+
+	//fn above_multiplier(&self) -> usize
+
+	//{
+
+	//	todo!()
+
+	//}
+
+	//fn verify(&self,below_size:usize,above_size:usize) -> bool
+
+	//{
+
+	//	below_size==self.bottom_size && above_size==self.top_size
+
+	//}
+
+
+
+	fn compose_requirements_upward(&self,requirements:LevelRequirements,_bottom_level:usize,_height:usize) -> LevelRequirements
+
+	{
+
+		if self.bottom_size % requirements.current_level_minimum_size != 0
+
+		{
+
+			panic!("This size cannot be satisfied by the ExplicitStage");
+
+		}
+
+		LevelRequirements{
+
+			group_size: 1,
+
+			current_level_minimum_size: self.top_size,
+
+		}
+
+	}
+
+	fn downward_size(&self,top_size:usize,_bottom_group_size:usize,_bottom_level:usize,_height:usize) -> Result<usize,Error>
+
+	{
+
+		if top_size==self.top_size
+
+		{
+
+			Ok(self.bottom_size)
+
+		}
+
+		else
+
+		{
+
+			Err(error!(undetermined))
+
+		}
+
+	}
+
+	fn amount_to_above(&self,below_router:usize,_group_size:usize, _bottom_size:usize) -> usize
+
+	{
+
+		self.bottom_list[below_router].len()
+
+	}
+
+	fn amount_to_below(&self,above_router:usize,_group_size:usize, _bottom_size:usize) -> usize
+
+	{
+
+		self.top_list[above_router].len()
+
+	}
+
+	fn to_above(&self, below_router:usize, index:usize, _group_size:usize, _bottom_size:usize) -> (usize,usize)
+
+	{
+
+		self.bottom_list[below_router][index]
+
+	}
+
+	fn to_below(&self, above_router:usize, index:usize, _group_size:usize, _bottom_size:usize) -> (usize,usize)
+
+	{
+
+		self.top_list[above_router][index]
+
+	}
+
+
+
+}
+
+pub fn file_adj(file:&File, _format:usize) -> (Vec<Vec<usize>>, Vec<Vec<usize>>, usize, usize)
+
+	{
+
+		//let mut adj=vec![Vec::with_capacity(degree);routers];
+
+		let mut adj_down : Vec<Vec<usize>> =vec![];
+
+		let mut adj_up : Vec<Vec<usize>> =vec![];
+
+		let mut nodos_up=None;
+
+		let mut nodos_down=None;
+
+		let reader = BufReader::new(file);
+
+		let mut lines=reader.lines();
+
+		//for rline in reader.lines()
+
+		while let Some(rline)=lines.next()
+
+		{
+
+			let line=rline.expect("Some problem when reading the topology.");
+
+			//println!("line: {}",line);
+
+			let mut words=line.split_whitespace();
+
+			match words.next()
+
+			{
+
+				Some("NODOS_0") =>
+
+				{
+
+					nodos_down=Some(words.next().unwrap().parse::<usize>().unwrap())
+
+					//assert!( nodos % 2 == 0); //should be even
+
+				},
+
+				Some("GRADO_0") =>
+
+				{
+
+					let grado=Some(words.next().unwrap().parse::<usize>().unwrap());
+
+					if let Some(routers)=nodos_down
+
+					{
+
+						assert!( routers % 2 == 0); //should be even
+
+						if let Some(degree)=grado
+
+						{
+
+							adj_up=vec![Vec::with_capacity(degree);routers]; //just half
+
+						}
+
+					}
+
+				},
+
+
+
+				Some("NODOS_1") =>
+
+				{
+
+					nodos_up=Some(words.next().unwrap().parse::<usize>().unwrap());
+
+					//assert!( nodos % 2 == 0); //should be even
+
+				},
+
+				Some("GRADO_1") =>
+
+				{
+
+					let grado=Some(words.next().unwrap().parse::<usize>().unwrap());
+
+					if let Some(routers)=nodos_up
+
+					{
+
+						//assert!( routers % 2 == 0); //should be even
+
+						if let Some(degree)=grado
+
+						{
+
+							adj_down=vec![Vec::with_capacity(degree);routers];
+
+						}
+
+					}
+
+				},
+
+				Some("N") =>
+
+				{
+
+
+
+					let nodos_down = nodos_down.expect("There should be a number, if not bad format");
+
+					//let nodos_up = nodos_up.expect("There should be a number, if not bad format");
+
+					let current=words.next().unwrap().parse::<usize>().unwrap();
+
+
+
+					for wneighbour in lines.next().unwrap().unwrap().split_whitespace()
+
+					{
+
+						let mut neighbour = wneighbour.parse::<usize>().unwrap();
+
+
+
+						if neighbour >= nodos_down{
+
+							neighbour -= nodos_down; //just to normalize, it should be done in an more efficient way, to avoid bugs also...
+
+						}
+
+
+
+						if current < nodos_down{
+
+
+
+							adj_up[current].push(neighbour);
+
+
+
+						}else{
+
+							let new_index = current - nodos_down;
+
+							adj_down[new_index].push(neighbour);
+
+
+
+						}
+
+					}
+
+				},
+
+				_ => panic!("Illegal word"),
+
+			};
+
+		}
+
+
+
+		(adj_up ,adj_down, nodos_down.expect("There should be a number, if not bad format"), nodos_up.expect("There should be a number, if not bad format"))
+
+	}
+
+impl ExplicitStageFile
+
+{
+
+	pub fn new(arg:StageBuilderArgument) -> ExplicitStageFile
+
+	{
+
+		let mut filename=None;
+
+		if let &ConfigurationValue::Object(ref cv_name, ref cv_pairs)=arg.cv
+
+		{
+
+			if cv_name!="ExplicitStageFile"
+
+			{
+
+				panic!("A ExplicitStageFile must be created from a `ExplicitStageFile` object not `{}`",cv_name);
+
+			}
+
+			for &(ref name,ref value) in cv_pairs
+
+			{
+
+				match name.as_ref()
+
+				{
+
+					"filename" => match value
+
+					{
+
+						&ConfigurationValue::Literal(ref s) => filename=Some(s.to_string()),
+
+						_ => panic!("bad value for filename"),
+
+					},
+
+					"legend_name" => (),
+
+					_ => panic!("Nothing to do with field {} in RandomRegular",name),
+
+				}
+
+			}
+
+		}
+
+		else
+
+		{
+
+			panic!("Trying to create a RandomRegular from a non-Object");
+
+		}
+
+		let format = 0;
+
+		let filename=filename.expect("There were no filename");
+
+		let file=File::open(&filename).expect("could not open topology file.");
+
+		let (upwards,downwards,size_down, size_up) = file_adj(&file,format);
+
+		let (bottom_list,top_list) = ExplicitStage::add_reverse_indices(&upwards,&downwards);
+
+
+
+		ExplicitStageFile{
+
+			bottom_size: size_down,
+
+			top_size: size_up,
+
+			bottom_list,
+
+			top_list,
+
+		}
+
+	}
+
+}
 
 #[derive(Quantifiable)]
 #[derive(Debug)]
@@ -1289,6 +1687,7 @@ pub fn new_stage(arg:StageBuilderArgument) -> Box<dyn Stage>
 			"Fat" => Box::new(FatStage::new(arg)),
 			"Projective" => Box::new(ProjectiveStage::new(arg)),
 			"RandomRegular" => Box::new(ExplicitStage::new(arg)),
+			"ExplicitStageFile" => Box::new(ExplicitStageFile::new(arg)),
 			"Widened" => Box::new(WidenedStage::new(arg)),
 			_ => panic!("Unknown stage {}",cv_name),
 		}

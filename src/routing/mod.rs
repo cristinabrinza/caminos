@@ -183,7 +183,7 @@ pub trait Routing : Debug
 	fn next(&self, routing_info:&RoutingInfo, topology:&dyn Topology, current_router:usize, target_router:usize, target_server:Option<usize>, num_virtual_channels:usize, rng: &mut StdRng) -> Result<RoutingNextCandidates,Error>;
 	//fn initialize_routing_info(&self, routing_info:&mut RoutingInfo, topology:&dyn Topology, current_router:usize, target_server:usize);
 	///Initialize the routing info of the packet. Called when the first phit of the packet leaves the server and enters a router.
-	fn initialize_routing_info(&self, _routing_info:&RefCell<RoutingInfo>, _topology:&dyn Topology, _current_router:usize, _target_touter:usize, _target_server:Option<usize>, _rng: &mut StdRng) {}
+	fn initialize_routing_info(&self, _routing_info:&RefCell<RoutingInfo>, _topology:&dyn Topology, _current_router:usize, _target_router:usize, _target_server:Option<usize>, _rng: &mut StdRng) {}
 	///Updates the routing info of the packet. Called when the first phit of the packet leaves a router and enters another router. Values are of the router being entered into.
 	fn update_routing_info(&self, _routing_info:&RefCell<RoutingInfo>, _topology:&dyn Topology, _current_router:usize, _current_port:usize, _target_router:usize, _target_server:Option<usize>,_rng: &mut StdRng) {}
 	///Prepares the routing to be utilized. Perhaps by precomputing routing tables.
@@ -430,8 +430,7 @@ pub fn new_routing(arg: RoutingBuilderArgument) -> Box<dyn Routing>
 			"Stubborn" => Box::new(Stubborn::new(arg)),
 			"UpDown" => Box::new(UpDown::new(arg)),
 			"UpDownStar" => Box::new(ExplicitUpDown::new(arg)),
-			"UpDownDeroutingAlways" => Box::new(UpDownDeroutingAlways::new(arg)),
-			"UpDownDeroutingLazy" => Box::new(UpDownDeroutingLazy::new(arg)),
+			"UpDownDerouting" => Box::new(UpDownDerouting::new(arg)),
 			"ChannelsPerHop" => Box::new(ChannelsPerHop::new(arg)),
 			"ChannelsPerHopPerLinkClass" => Box::new(ChannelsPerHopPerLinkClass::new(arg)),
 			"AscendantChannelsWithLinkClass" => Box::new(AscendantChannelsWithLinkClass::new(arg)),
